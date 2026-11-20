@@ -22,11 +22,21 @@ export async function speak(speaker: CharacterId, text: string, audioPath: strin
     return transcribeWords(audio);
   }
   const metaPath = `${audioPath}.words.json`;
-  execFileSync(
-    process.env.PR_BRAINROT_PYTHON ?? "python",
-    [path.resolve("src", "edge_tts_line.py"), c.edgeVoice, c.edgeRate, c.edgePitch, audioPath, metaPath],
-    { input: text, stdio: ["pipe", "inherit", "inherit"] },
-  );
+  // edge-tts sometimes fails transiently (NoAudioReceived); retry with backoff before giving up.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      execFileSync(
+        process.env.PR_BRAINROT_PYTHON ?? "python",
+        [path.resolve("src", "edge_tts_line.py"), c.edgeVoice, c.edgeRate, c.edgePitch, audioPath, metaPath],
+        { input: text, stdio: ["pipe", "inherit", "inherit"] },
+      );
+      break;
+    } catch (error) {
+      if (attempt >= 4) throw error;
+      console.warn(`  edge-tts failed (attempt ${attempt}/4), retrying in ${attempt * 5}s`);
+      await new Promise((resolve) => setTimeout(resolve, attempt * 5000));
+    }
+  }
   const words = JSON.parse(readFileSync(metaPath, "utf8")) as Word[];
   return words.length > 0 ? words : null;
 }
