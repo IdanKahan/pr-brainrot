@@ -5,7 +5,7 @@ import { CHARACTERS, type CharacterId } from "./config";
 import { synthesize, transcribeWords } from "./fish";
 import type { Word } from "./types";
 
-// Fish = the real Peter/Stewie voices. Falls back to edge-tts for the whole video when Fish fails (see pipeline.ts).
+// Fish = the real Peter/Stewie voices. edge-tts only when ALLOW_EDGE_TTS=1 (owner doesn't want edge-tts videos).
 let fishFailed = false;
 export const disableFish = (): void => { fishFailed = true; };
 export const useFish = (): boolean => Boolean(process.env.FISH_API_KEY) && !fishFailed;
@@ -26,6 +26,8 @@ export async function speak(speaker: CharacterId, text: string, audioPath: strin
     writeFileSync(audioPath, audio);
     return useFishAsr() ? transcribeWords(audio) : null;
   }
+  if (process.env.ALLOW_EDGE_TTS !== "1")
+    throw new Error("FISH_API_KEY missing and ALLOW_EDGE_TTS is not 1: refusing to make an edge-tts video");
   const metaPath = `${audioPath}.words.json`;
   // edge-tts sometimes fails transiently (NoAudioReceived); retry with backoff before giving up.
   for (let attempt = 1; ; attempt++) {

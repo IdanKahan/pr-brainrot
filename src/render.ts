@@ -48,6 +48,8 @@ export async function renderVideo(props: VideoProps, outputLocation: string): Pr
     outputLocation: master,
     inputProps: props,
     scale: COMPACT_SCALE,
+    // Few parallel Chrome tabs: a full-CPU render ran this PC out of memory. RENDER_CONCURRENCY overrides.
+    concurrency: Number(process.env.RENDER_CONCURRENCY ?? 2),
     onProgress: ({ progress }) => {
       const percent = Math.floor(progress * 100);
       if (percent !== lastPercent) {

@@ -109,9 +109,9 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     try {
       voiced = await voiceLine(runDir, index, line.text, line.speaker);
     } catch (error) {
-      if (!useFish()) throw error;
-      // Fish failed (no credit, free model ended, outage): redo the whole video with edge-tts so voices don't mix.
-      console.warn(`  Fish failed, using edge-tts for this video: ${error instanceof Error ? error.message : error}`);
+      // No edge-tts fallback by default (owner: never publish edge-tts videos). Fail this video; the run skips it.
+      if (!useFish() || process.env.ALLOW_EDGE_TTS !== "1") throw error;
+      console.warn(`  Fish failed, ALLOW_EDGE_TTS=1 so using edge-tts for this video: ${error instanceof Error ? error.message : error}`);
       disableFish();
       return generate(options);
     }
