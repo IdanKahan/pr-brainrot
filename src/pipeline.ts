@@ -6,7 +6,7 @@ import { copyImages, postAt, runSlugFor, type Topic } from "./chiefdelphi";
 import { CHARACTERS, GAMEPLAY, type CharacterId } from "./config";
 import { renderVideo } from "./render";
 import { writeScript, type Script } from "./script";
-import { speak, voiceKey } from "./tts";
+import { disableFish, speak, useFish, voiceKey } from "./tts";
 import type { Beat, PostView, VideoProps, Word } from "./types";
 
 export interface GenerateOptions {
@@ -104,8 +104,17 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
 
   const beats: Beat[] = [];
   for (const [index, line] of script.lines.entries()) {
-    console.log(`Voicing line ${index + 1}/${script.lines.length}`);
-    const voiced = await voiceLine(runDir, index, line.text, line.speaker);
+    console.log(`Voicing line ${index + 1}/${script.lines.length}${useFish() ? " (Fish)" : " (edge-tts)"}`);
+    let voiced;
+    try {
+      voiced = await voiceLine(runDir, index, line.text, line.speaker);
+    } catch (error) {
+      if (!useFish()) throw error;
+      // Fish failed (no credit, free model ended, outage): redo the whole video with edge-tts so voices don't mix.
+      console.warn(`  Fish failed, using edge-tts for this video: ${error instanceof Error ? error.message : error}`);
+      disableFish();
+      return generate(options);
+    }
     beats.push({
       speaker: line.speaker,
       text: line.text,

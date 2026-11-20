@@ -58,7 +58,7 @@ const FALLBACK_RULES = `You write scripts for 30 to 60 second vertical "brainrot
 Two Family Guy characters talk over Minecraft parkour footage. The top half of the screen shows the forum post being discussed.
 Rules:
 - 8 to 14 short lines, 100 to 160 words total. Stewie explains, Peter is confused. Line 1 is a hook. End with a punchline.
-- Cover the original post and 2 or 3 top replies by username ("and then some guy named truher said...").
+- Cover the original post and every relevant comment (usually 3 or 4) by username ("and then some guy named truher said..."); skip off-topic or +1 comments.
 - FRC terms must be correct; if unsure, stay vague. Jokes target ideas, rules and robots, never people. PG.
 - Spoken-friendly: spell out numbers, no URLs, no markdown, no emoji.
 - "title" is at most 8 words.`;
@@ -73,7 +73,7 @@ function buildPrompt(topic: Topic): string {
   const cast = CHARACTER_IDS.map((id) => `- "${id}": ${CHARACTERS[id].persona}`).join("\n");
   const posts = [
     { post: 0, role: "original post", ...topic.op },
-    ...topic.top_replies.map((r, i) => ({ post: i + 1, role: "top reply", ...r })),
+    ...topic.top_replies.map((r, i) => ({ post: i + 1, role: "comment", ...r })),
   ].map((p) => ({ post: p.post, role: p.role, user: p.user, likes: p.likes, text: p.text.slice(0, 1500) }));
   return `${loadRules()}
 

@@ -14,7 +14,8 @@ export async function synthesize(text: string, voiceId: string): Promise<Buffer>
     headers: {
       Authorization: `Bearer ${apiKey()}`,
       "Content-Type": "application/json",
-      model: process.env.FISH_TTS_MODEL ?? "s2.1-pro",
+      // Free model (DelphiTok D-015); set FISH_TTS_MODEL=s2.1-pro once the free period ends and the account has credit.
+      model: process.env.FISH_TTS_MODEL ?? "s2.1-pro-free",
     },
     body: JSON.stringify({ text, reference_id: voiceId, format: "mp3", mp3_bitrate: 128, latency: "normal" }),
   });

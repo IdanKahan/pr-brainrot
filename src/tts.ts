@@ -5,7 +5,12 @@ import { CHARACTERS, type CharacterId } from "./config";
 import { synthesize, transcribeWords } from "./fish";
 import type { Word } from "./types";
 
-const useFish = (): boolean => Boolean(process.env.FISH_API_KEY);
+// Fish = the real Peter/Stewie voices. Falls back to edge-tts for the whole video when Fish fails (see pipeline.ts).
+let fishFailed = false;
+export const disableFish = (): void => { fishFailed = true; };
+export const useFish = (): boolean => Boolean(process.env.FISH_API_KEY) && !fishFailed;
+/** Fish speech-to-text is paid; off unless FISH_ASR=1. Without it captions use estimated word timings. */
+const useFishAsr = (): boolean => process.env.FISH_ASR === "1";
 
 /** Identifies the voice configuration, for cache keys. */
 export function voiceKey(speaker: CharacterId): string {
@@ -19,7 +24,7 @@ export async function speak(speaker: CharacterId, text: string, audioPath: strin
   if (useFish()) {
     const audio = await synthesize(text, c.voiceId);
     writeFileSync(audioPath, audio);
-    return transcribeWords(audio);
+    return useFishAsr() ? transcribeWords(audio) : null;
   }
   const metaPath = `${audioPath}.words.json`;
   // edge-tts sometimes fails transiently (NoAudioReceived); retry with backoff before giving up.
