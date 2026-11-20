@@ -7,7 +7,7 @@ import { BrainrotVideo } from "./video";
 
 loadFonts();
 
-const EMPTY_PROPS: VideoProps = { title: "No props", prLabel: "", beats: [], gameplay: GAMEPLAY, gameplayStartSeconds: 0 };
+const EMPTY_PROPS: VideoProps = { title: "No props", threadTitle: "", threadLabel: "", stats: "", beats: [], gameplay: GAMEPLAY, gameplayStartSeconds: 0 };
 
 export const RemotionRoot: React.FC = () => (
   <Composition

@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { CHARACTER_IDS, CHARACTERS, type CharacterId } from "./config";
-import { formatHunksForPrompt, type Hunk } from "./diff";
-import type { PullRequest } from "./github";
+import type { Topic } from "./chiefdelphi";
 
 const ScriptSchema = z.object({
   title: z.string(),
@@ -14,10 +15,9 @@ const ScriptSchema = z.object({
       z.object({
         speaker: z.enum(CHARACTER_IDS as [CharacterId, ...CharacterId[]]),
         text: z.string(),
-        hunk: z.string().nullable(),
-        // Plain numbers: integer bounds aren't supported by every structured-output backend.
-        focusFrom: z.number(),
-        focusTo: z.number(),
+        // 0 = the original post, 1..N = top_replies[N-1], null = nothing specific.
+        // Plain number: integer bounds aren't supported by every structured-output backend.
+        post: z.number().nullable(),
       }),
     )
     .min(2),
@@ -34,7 +34,7 @@ export type Provider = (typeof PROVIDERS)[number];
 const DEFAULT_MODELS: Record<Provider, string> = {
   anthropic: "claude-opus-5-5",
   openrouter: "anthropic/claude-opus-5.5",
-  "claude-code": "opus",
+  "claude-code": "sonnet",
 };
 
 /** Models that accept server-side refusal fallbacks (`fallbacks: "default"`). */
@@ -54,28 +54,43 @@ export function resolveProvider(): Provider {
   return "claude-code";
 }
 
-function buildPrompt(pr: PullRequest, hunks: readonly Hunk[]): string {
+const FALLBACK_RULES = `You write scripts for 30 to 60 second vertical "brainrot" videos about FRC (FIRST Robotics Competition) Chief Delphi threads.
+Two Family Guy characters talk over Minecraft parkour footage. The top half of the screen shows the forum post being discussed.
+Rules:
+- 8 to 14 short lines, 100 to 160 words total. Stewie explains, Peter is confused. Line 1 is a hook. End with a punchline.
+- Cover the original post and 2 or 3 top replies by username ("and then some guy named truher said...").
+- FRC terms must be correct; if unsure, stay vague. Jokes target ideas, rules and robots, never people. PG.
+- Spoken-friendly: spell out numbers, no URLs, no markdown, no emoji.
+- "title" is at most 8 words.`;
+
+/** The owner's tunable prompt at pipeline/prompts/script.md (two levels above the fork root) if present. */
+function loadRules(): string {
+  const file = path.resolve("..", "..", "pipeline", "prompts", "script.md");
+  return existsSync(file) ? readFileSync(file, "utf8") : FALLBACK_RULES;
+}
+
+function buildPrompt(topic: Topic): string {
   const cast = CHARACTER_IDS.map((id) => `- "${id}": ${CHARACTERS[id].persona}`).join("\n");
-  return `Write a script for a ~60 second "brainrot" short video (TikTok style: two Family Guy characters talk over Minecraft parkour gameplay) that explains a GitHub pull request. The top half of the screen shows the code being discussed.
+  const posts = [
+    { post: 0, role: "original post", ...topic.op },
+    ...topic.top_replies.map((r, i) => ({ post: i + 1, role: "top reply", ...r })),
+  ].map((p) => ({ post: p.post, role: p.role, user: p.user, likes: p.likes, text: p.text.slice(0, 1500) }));
+  return `${loadRules()}
+
+---
+Output format override (follow this instead of any output format above): a JSON object {"title": string, "lines": [{"speaker": "peter" | "stewie", "text": string, "post": number | null}]}.
+HARD LIMIT: aim for 120 to 140 words across all lines, never more than 150 (the video must stay under 60 seconds); keep every line under 18 words and use at most 11 lines.
+"title" replaces "hook": a short punchy video title, at most 8 words.
+"post" says which post the line is about, so the screen can show it: 0 = the original post, 1..${topic.top_replies.length} = the matching entry in "posts" below, null = nothing specific. Set it on every line that discusses a post, and keep it matching what the line says.
 
 Cast:
 ${cast}
 
-Rules:
-- 10 to 16 lines, alternating speakers mostly, 150 to 190 words in total. Each line at most 30 words.
-- Open with a hook in the first line. End with a punchline.
-- Be technically accurate: a developer watching should actually understand what changed and why.
-- Lines are fed to text-to-speech. Write them to be spoken: no markdown, no emoji, no URLs, no code syntax. Say identifiers as words ("the use can save monitor hook", not "useCanSaveMonitor()").
-- When a line discusses specific code, set "hunk" to the hunk id (like "h2") and "focusFrom"/"focusTo" to the 1-based line numbers within that hunk being discussed (at most 12 lines apart). Otherwise set "hunk" to null and both focus fields to 0. Most lines should point at code.
-- "title" is a short, punchy title for the video (max 8 words).
+Thread: ${topic.title}
+Category: ${topic.category}. ${topic.likes} likes, ${topic.replies} replies.
 
-Pull request: ${pr.owner}/${pr.repo}#${pr.number} — ${pr.title}
-
-Description:
-${pr.body.slice(0, 6000)}
-
-Diff hunks:
-${formatHunksForPrompt(hunks)}`;
+posts:
+${JSON.stringify(posts, null, 1)}`;
 }
 
 async function viaAnthropic(prompt: string, model: string): Promise<Script> {
@@ -129,17 +144,36 @@ function viaClaudeCode(prompt: string, model: string): Script {
   return ScriptSchema.parse(response.structured_output);
 }
 
-export async function writeScript(pr: PullRequest, hunks: readonly Hunk[]): Promise<Script> {
+function validate(script: Script, topic: Topic): Script {
+  const max = topic.top_replies.length;
+  const words = script.lines.reduce((n, l) => n + l.text.split(/\s+/).length, 0);
+  if (script.lines.length < 6 || script.lines.length > 18) throw new Error(`bad line count ${script.lines.length}`);
+  if (words < 80 || words > 160) throw new Error(`bad word count ${words}`);
+  return {
+    title: script.title.trim(),
+    lines: script.lines.map((l) => ({ ...l, post: l.post !== null && Number.isInteger(l.post) && l.post >= 0 && l.post <= max ? l.post : null })),
+  };
+}
+
+export async function writeScript(topic: Topic): Promise<Script> {
   const provider = resolveProvider();
   const model = process.env.PR_BRAINROT_MODEL || DEFAULT_MODELS[provider];
-  console.log(`Writing script with ${provider} (${model}, ${hunks.length} hunks)…`);
-  const prompt = buildPrompt(pr, hunks);
-  switch (provider) {
-    case "anthropic":
-      return viaAnthropic(prompt, model);
-    case "openrouter":
-      return viaOpenRouter(prompt, model);
-    case "claude-code":
-      return viaClaudeCode(prompt, model);
+  console.log(`Writing script with ${provider} (${model})…`);
+  const prompt = buildPrompt(topic);
+  const run = async (): Promise<Script> => {
+    switch (provider) {
+      case "anthropic":
+        return viaAnthropic(prompt, model);
+      case "openrouter":
+        return viaOpenRouter(prompt, model);
+      case "claude-code":
+        return viaClaudeCode(prompt, model);
+    }
+  };
+  try {
+    return validate(await run(), topic);
+  } catch (error) {
+    console.warn(`Script attempt failed (${error instanceof Error ? error.message : String(error)}); retrying once`);
+    return validate(await run(), topic);
   }
 }

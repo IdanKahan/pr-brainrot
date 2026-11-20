@@ -1,28 +1,25 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { CHARACTERS, GAMEPLAY } from "./config";
-import { parseDiff, type Hunk } from "./diff";
-import { synthesize, transcribeWords } from "./fish";
-import { fetchPullRequest, type PullRequest } from "./github";
-import { highlightHunk } from "./highlight";
+import { copyImages, postAt, runSlugFor, type Topic } from "./chiefdelphi";
+import { CHARACTERS, GAMEPLAY, type CharacterId } from "./config";
 import { renderVideo } from "./render";
 import { writeScript, type Script } from "./script";
-import type { Beat, CodeView, Gameplay, VideoProps, Word } from "./types";
+import { speak, voiceKey } from "./tts";
+import type { Beat, PostView, VideoProps, Word } from "./types";
 
 export interface GenerateOptions {
-  readonly url: string;
+  readonly topic: Topic;
+  readonly topicPath: string;
   /** Ignore a cached script.json and ask the model again. */
   readonly newScript: boolean;
   readonly render: boolean;
-  readonly full: boolean;
-  /** Replaces the bundled parkour clip. */
-  readonly gameplayUrl: string | undefined;
+  /** Final mp4 location; the render goes to a temp name next to it first. */
+  readonly output: string;
 }
 
 export interface GenerateResult {
-  readonly pr: PullRequest;
   readonly script: Script;
   /** Absolute path, or null when rendering was skipped. */
   readonly video: string | null;
@@ -40,7 +37,7 @@ function probeSeconds(file: string): number {
   return Number(seconds.trim());
 }
 
-/** Spreads the script's words over the clip, weighted by length, when speech-to-text is unavailable. */
+/** Spreads the script's words over the clip, weighted by length, when real timings are unavailable. */
 function estimateWords(text: string, durationMs: number): Word[] {
   const words = text.split(/\s+/).filter(Boolean);
   const weights = words.map((w) => w.length + 2);
@@ -54,60 +51,43 @@ function estimateWords(text: string, durationMs: number): Word[] {
   });
 }
 
-async function voiceLine(runDir: string, index: number, text: string, voiceId: string): Promise<{ audioFile: string } & LineAudio> {
-  const key = createHash("sha256").update(`${voiceId}\n${text}`).digest("hex").slice(0, 10);
+async function voiceLine(runDir: string, index: number, text: string, speaker: CharacterId): Promise<{ audioFile: string } & LineAudio> {
+  const key = createHash("sha256").update(`${voiceKey(speaker)}\n${text}`).digest("hex").slice(0, 10);
   const audioFile = `line-${index}-${key}.mp3`;
   const metaPath = path.join(runDir, `line-${index}-${key}.json`);
   if (existsSync(metaPath)) {
     return { audioFile, ...(JSON.parse(readFileSync(metaPath, "utf8")) as LineAudio) };
   }
-  const audio = await synthesize(text, voiceId);
   const audioPath = path.join(runDir, audioFile);
-  writeFileSync(audioPath, audio);
-  const durationMs = Math.round(probeSeconds(audioPath) * 1000);
-  const words = (await transcribeWords(audio)) ?? estimateWords(text, durationMs);
-  const meta: LineAudio = { durationMs, words };
+  const timed = await speak(speaker, text, audioPath);
+  const probed = Math.round(probeSeconds(audioPath) * 1000);
+  // edge-tts mp3s carry ~0.8 s of trailing silence; cut at the last word when real timings exist.
+  const lastEnd = timed?.at(-1)?.endMs;
+  const durationMs = lastEnd ? Math.min(probed, Math.round(lastEnd) + 250) : probed;
+  const meta: LineAudio = { durationMs, words: timed ?? estimateWords(text, durationMs) };
   writeFileSync(metaPath, JSON.stringify(meta, null, 2));
   return { audioFile, ...meta };
 }
 
-async function codeViewFor(line: Script["lines"][number], hunks: readonly Hunk[]): Promise<CodeView | null> {
-  const hunk = hunks.find((h) => h.id === line.hunk);
-  if (!hunk || hunk.lines.length === 0) return null;
-  const last = hunk.lines.length - 1;
-  const focusFrom = Math.min(Math.max(Math.round(line.focusFrom) - 1, 0), last);
-  const focusTo = Math.min(Math.max(Math.round(line.focusTo) - 1, focusFrom), last);
-  return { hunkId: hunk.id, file: hunk.file, lines: await highlightHunk(hunk), focusFrom, focusTo };
-}
-
-/** Downloads a gameplay clip and crops it to the bottom panel. */
-async function prepareGameplay(url: string | undefined, runDir: string, slug: string): Promise<Gameplay> {
-  if (!url) return GAMEPLAY;
-  const raw = path.join(runDir, "gameplay-source");
-  const output = path.join(runDir, "gameplay.mp4");
-  if (!existsSync(output)) {
-    console.log(`Downloading gameplay from ${url}`);
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Gameplay download failed: HTTP ${response.status}`);
-    writeFileSync(raw, Buffer.from(await response.arrayBuffer()));
-    execFileSync("ffmpeg", [
-      ...["-y", "-loglevel", "error", "-i", raw, "-t", "180", "-an"],
-      ...["-vf", "scale=720:640:force_original_aspect_ratio=increase,crop=720:640,fps=30,format=yuv420p"],
-      ...["-c:v", "libx264", "-crf", "26", "-preset", "veryfast", output],
-    ]);
-  }
-  return { src: `runs/${slug}/gameplay.mp4`, durationInSeconds: Math.floor(probeSeconds(output)) };
+function postView(topic: Topic, n: number, slug: string): PostView | null {
+  const p = postAt(topic, n);
+  if (!p) return null;
+  return {
+    index: n,
+    user: p.user,
+    avatar: p.avatar ? `runs/${slug}/${p.avatar}` : null,
+    likes: p.likes,
+    text: p.text,
+    image: n === 0 && topic.op.image ? `runs/${slug}/${topic.op.image}` : null,
+  };
 }
 
 export async function generate(options: GenerateOptions): Promise<GenerateResult> {
-  console.log(`Fetching ${options.url}`);
-  const pr = fetchPullRequest(options.url);
-  const hunks = parseDiff(pr.diff);
-  if (hunks.length === 0) throw new Error("The pull request has no reviewable diff hunks.");
-
-  const slug = `${pr.owner}-${pr.repo}-${pr.number}`;
+  const { topic } = options;
+  const slug = runSlugFor(options.topicPath, topic);
   const runDir = path.join("public", "runs", slug);
   mkdirSync(runDir, { recursive: true });
+  copyImages(options.topicPath, runDir);
 
   const scriptPath = path.join(runDir, "script.json");
   let script: Script;
@@ -115,46 +95,51 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     console.log(`Reusing ${scriptPath} (pass --new-script to rewrite it)`);
     script = JSON.parse(readFileSync(scriptPath, "utf8")) as Script;
   } else {
-    script = await writeScript(pr, hunks);
+    script = await writeScript(topic);
     writeFileSync(scriptPath, JSON.stringify(script, null, 2));
   }
   console.log(`\n"${script.title}"`);
-  for (const line of script.lines) console.log(`  ${CHARACTERS[line.speaker].name}: ${line.text}`);
+  for (const line of script.lines) console.log(`  ${CHARACTERS[line.speaker].name} [${line.post ?? "-"}]: ${line.text}`);
   console.log();
 
   const beats: Beat[] = [];
   for (const [index, line] of script.lines.entries()) {
     console.log(`Voicing line ${index + 1}/${script.lines.length}`);
-    const voiced = await voiceLine(runDir, index, line.text, CHARACTERS[line.speaker].voiceId);
+    const voiced = await voiceLine(runDir, index, line.text, line.speaker);
     beats.push({
       speaker: line.speaker,
       text: line.text,
       audio: `runs/${slug}/${voiced.audioFile}`,
       durationMs: voiced.durationMs,
       words: voiced.words,
-      code: await codeViewFor(line, hunks),
+      post: line.post === null ? null : postView(topic, line.post, slug),
     });
   }
 
-  const gameplay = await prepareGameplay(options.gameplayUrl, runDir, slug);
   const totalSeconds = beats.reduce((sum, b) => sum + b.durationMs, 0) / 1000;
-  const spareSeconds = Math.max(0, gameplay.durationInSeconds - totalSeconds - 5);
+  const spareSeconds = Math.max(0, GAMEPLAY.durationInSeconds - totalSeconds - 5);
   const props: VideoProps = {
     title: script.title,
-    prLabel: `${pr.owner}/${pr.repo}#${pr.number}`,
+    threadTitle: topic.title,
+    threadLabel: `Chief Delphi › ${topic.category}`,
+    stats: `\u{1F44D} ${topic.likes} · \u{1F4AC} ${topic.replies}`,
     beats,
-    gameplay,
-    gameplayStartSeconds: spareSeconds >= 1 ? (pr.number * 37) % Math.floor(spareSeconds) : 0,
+    gameplay: GAMEPLAY,
+    gameplayStartSeconds: spareSeconds >= 1 ? (topic.id * 37) % Math.floor(spareSeconds) : 0,
   };
   mkdirSync("out", { recursive: true });
   const propsPath = path.join("out", `${slug}.props.json`);
   writeFileSync(propsPath, JSON.stringify(props, null, 2));
   console.log(`Props: ${propsPath} (${totalSeconds.toFixed(1)}s of speech)`);
 
-  if (!options.render) return { pr, script, video: null };
-  const output = path.resolve("out", `${slug}.mp4`);
-  await renderVideo(props, output, { full: options.full });
+  if (!options.render) return { script, video: null };
+  // Render to a temp name, then rename, so the feed never sees a half-written file.
+  const output = path.resolve(options.output);
+  mkdirSync(path.dirname(output), { recursive: true });
+  const temp = output.replace(/\.mp4$/, ".partial.mp4");
+  await renderVideo(props, temp);
+  renameSync(temp, output);
   const megabytes = statSync(output).size / 1024 / 1024;
   console.log(`\nVideo: ${output} (${megabytes.toFixed(1)} MB)`);
-  return { pr, script, video: output };
+  return { script, video: output };
 }

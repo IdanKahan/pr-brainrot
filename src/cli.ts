@@ -1,13 +1,32 @@
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+import { loadTopic, runSlugFor, type Topic } from "./chiefdelphi";
 import { generate } from "./pipeline";
-import { PUBLISH_MODES, publish, uploadVideo, type PublishMode } from "./publish";
 
-const USAGE = `Usage: pnpm make <github-pr-url> [options]
+const USAGE = `Usage: npx tsx src/cli.ts <path-to-topic.json> [options]
 
-  --new-script         ask the model for a new script instead of reusing the cached one
-  --no-render          stop after writing out/<slug>.props.json
-  --full               keep the 1080×1920 render instead of the <10 MB GitHub encode
-  --gameplay=<url>     use another gameplay clip
-  --publish=<mode>     upload and post to the PR: ${PUBLISH_MODES.join(" | ")}`;
+  --new-script     ask the model for a new script instead of reusing the cached one
+  --no-render      stop after writing out/<slug>.props.json
+  --out=<dir>      output folder (default ../../feed/videos)`;
+
+const escapeHtml = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+function clip(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max - 3).trimEnd()}...`;
+}
+
+/** Erin sidecar: title, caption (HTML) and link. */
+function sidecar(topic: Topic): object {
+  const replies = topic.top_replies.slice(0, 3).map((r) => `${escapeHtml(r.user)} (❤ ${r.likes}): ${escapeHtml(clip(r.text, 120 - r.user.length - 8))}`);
+  const caption = [
+    `\u{1F44D} ${topic.likes} · \u{1F4AC} ${topic.replies} · Chief Delphi › ${escapeHtml(topic.category)}`,
+    "<b>Top replies</b>",
+    ...replies,
+    `<a href="${escapeHtml(topic.url)}">Read the thread on Chief Delphi</a>`,
+  ].join("<br>");
+  return { video_title: topic.title, video_caption: caption, video_link: topic.url };
+}
 
 async function main(): Promise<void> {
   try {
@@ -15,33 +34,24 @@ async function main(): Promise<void> {
   } catch {
     // Optional: keys can also come from the shell environment.
   }
-
   const args = process.argv.slice(2);
-  const url = args.find((a) => !a.startsWith("--"));
-  const flags = new Set(args.filter((a) => a.startsWith("--") && !a.includes("=")));
-  const option = (name: string): string | undefined =>
-    args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
-  const publishMode = option("publish");
-  if (!url || (publishMode && !(PUBLISH_MODES as readonly string[]).includes(publishMode))) {
+  const topicPath = args.find((a) => !a.startsWith("--"));
+  if (!topicPath) {
     console.error(USAGE);
     process.exit(1);
   }
-  if (!process.env.FISH_API_KEY) {
-    console.error("FISH_API_KEY is not set. Put it in .env at the repo root.");
-    process.exit(1);
-  }
-
+  const outDir = path.resolve(args.find((a) => a.startsWith("--out="))?.slice(6) ?? path.join("..", "..", "feed", "videos"));
+  const topic = loadTopic(topicPath);
+  const slug = runSlugFor(topicPath, topic);
   const result = await generate({
-    url,
-    newScript: flags.has("--new-script"),
-    render: !flags.has("--no-render"),
-    full: flags.has("--full"),
-    gameplayUrl: option("gameplay"),
+    topic,
+    topicPath,
+    newScript: args.includes("--new-script"),
+    render: !args.includes("--no-render"),
+    output: path.join(outDir, `${slug}.mp4`),
   });
-  if (!publishMode || !result.video) return;
-  const videoUrl = await uploadVideo(result.video, result.pr);
-  console.log(`Uploaded: ${videoUrl}`);
-  console.log(`Posted: ${publish(publishMode as PublishMode, result.pr, result.script, videoUrl)}`);
+  if (!result.video) return;
+  writeFileSync(path.join(outDir, `${slug}.json`), JSON.stringify(sidecar(topic), null, 2));
 }
 
 main().catch((error: unknown) => {

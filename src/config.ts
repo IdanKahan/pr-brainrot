@@ -11,6 +11,9 @@ export const CHARACTERS = {
   peter: {
     name: "Peter",
     voiceId: "d75c270eaee14c8aa1e9e980cc37cf1b",
+    edgeVoice: "en-US-GuyNeural",
+    edgeRate: "+15%",
+    edgePitch: "-4Hz",
     image: "characters/peter.png",
     side: "left",
     persona:
@@ -19,10 +22,13 @@ export const CHARACTERS = {
   stewie: {
     name: "Stewie",
     voiceId: "e91c4f5974f149478a35affe820d02ac",
+    edgeVoice: "en-GB-RyanNeural",
+    edgeRate: "+20%",
+    edgePitch: "+12Hz",
     image: "characters/stewie.png",
     side: "right",
     persona:
-      "Stewie Griffin: condescending British baby genius who actually understands the code, explains it precisely, insults Peter ('you fat imbecile', 'oh dear god').",
+      "Stewie Griffin: condescending British baby genius who actually understands the robotics, explains it precisely, insults Peter ('you fat imbecile', 'oh dear god').",
   },
 } as const;
 

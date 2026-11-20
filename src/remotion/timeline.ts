@@ -1,21 +1,21 @@
 import { GAP_FRAMES, OUTRO_FRAMES } from "../config";
-import type { Beat, CodeView } from "../types";
+import type { Beat, PostView } from "../types";
 
 export interface TimedBeat {
   readonly beat: Beat;
   readonly from: number;
   readonly durationInFrames: number;
-  /** The beat's code, or the most recent earlier beat's code when it has none. */
-  readonly code: CodeView | null;
+  /** The beat's post, or the most recent earlier beat's post when it has none. */
+  readonly post: PostView | null;
 }
 
 export function buildTimeline(beats: readonly Beat[], fps: number): TimedBeat[] {
   let from = 0;
-  let code: CodeView | null = null;
+  let post: PostView | null = null;
   return beats.map((beat) => {
     const durationInFrames = Math.ceil((beat.durationMs / 1000) * fps) + GAP_FRAMES;
-    code = beat.code ?? code;
-    const timed = { beat, from, durationInFrames, code };
+    post = beat.post ?? post;
+    const timed = { beat, from, durationInFrames, post };
     from += durationInFrames;
     return timed;
   });

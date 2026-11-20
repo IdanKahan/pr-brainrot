@@ -1,26 +1,16 @@
 import type { CharacterId } from "./config";
 
-export type LineKind = "add" | "del" | "ctx";
-
-export interface CodeToken {
-  readonly content: string;
-  readonly color: string;
-}
-
-export interface CodeLine {
-  readonly kind: LineKind;
-  readonly tokens: readonly CodeToken[];
-}
-
-/** A highlighted diff hunk with the line range the speaker is talking about. */
-export interface CodeView {
-  readonly hunkId: string;
-  readonly file: string;
-  readonly lines: readonly CodeLine[];
-  /** 0-based, inclusive. */
-  readonly focusFrom: number;
-  /** 0-based, inclusive. */
-  readonly focusTo: number;
+/** A Chief Delphi post shown in the top panel. */
+export interface PostView {
+  /** 0 = OP, 1..N = top replies. */
+  readonly index: number;
+  readonly user: string;
+  /** Path relative to `public/`, or null. */
+  readonly avatar: string | null;
+  readonly likes: number;
+  readonly text: string;
+  /** Path relative to `public/`, or null. */
+  readonly image: string | null;
 }
 
 export interface Word {
@@ -36,7 +26,7 @@ export interface Beat {
   readonly audio: string;
   readonly durationMs: number;
   readonly words: readonly Word[];
-  readonly code: CodeView | null;
+  readonly post: PostView | null;
 }
 
 export interface Gameplay {
@@ -49,7 +39,10 @@ export interface Gameplay {
 // to be assignable to Record<string, unknown>.
 export type VideoProps = {
   readonly title: string;
-  readonly prLabel: string;
+  /** The Chief Delphi thread title (`title` is the short video hook). */
+  readonly threadTitle: string;
+  readonly threadLabel: string;
+  readonly stats: string;
   readonly beats: readonly Beat[];
   readonly gameplay: Gameplay;
   readonly gameplayStartSeconds: number;

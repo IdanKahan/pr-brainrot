@@ -2,11 +2,11 @@ import { AbsoluteFill, Audio, Loop, OffthreadVideo, Sequence, staticFile, useCur
 import { PANEL_HEIGHT } from "../config";
 import type { VideoProps } from "../types";
 import { Captions } from "./captions";
-import { CodePanel } from "./code-panel";
+import { PostPanel } from "./post-panel";
 import { Speaker } from "./speaker";
 import { activeBeatIndex, buildTimeline } from "./timeline";
 
-export const BrainrotVideo: React.FC<VideoProps> = ({ title, prLabel, beats, gameplay, gameplayStartSeconds }) => {
+export const BrainrotVideo: React.FC<VideoProps> = ({ threadTitle, threadLabel, stats, beats, gameplay, gameplayStartSeconds }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const timeline = buildTimeline(beats, fps);
@@ -17,7 +17,7 @@ export const BrainrotVideo: React.FC<VideoProps> = ({ title, prLabel, beats, gam
   return (
     <AbsoluteFill style={{ backgroundColor: "#0d1117" }}>
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: PANEL_HEIGHT, overflow: "hidden" }}>
-        <CodePanel title={title} prLabel={prLabel} timeline={timeline} active={active} />
+        <PostPanel title={threadTitle} threadLabel={threadLabel} stats={stats} timeline={timeline} active={active} />
       </div>
       <div style={{ position: "absolute", top: PANEL_HEIGHT, left: 0, right: 0, bottom: 0, overflow: "hidden" }}>
         <Loop durationInFrames={gameplayFrames}>
